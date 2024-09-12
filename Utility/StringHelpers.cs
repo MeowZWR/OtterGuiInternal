@@ -28,6 +28,19 @@ public static class StringHelpers
         }
     }
 
+    /// <inheritdoc cref="AddText(ImDrawListPtr, Vector2, uint, ReadOnlySpan{char}, bool)"/>
+    public static unsafe void AddText(ImDrawListPtr drawList, Vector2 position, uint color, ReadOnlySpan<byte> text, bool checkSharp)
+    {
+        var endIdx = checkSharp ? SplitStringWithoutNull(text).VisibleEnd : text.Length;
+        if (endIdx == 0)
+            return;
+
+        fixed (byte* start = text)
+        {
+            ImGuiNative.ImDrawList_AddText_Vec2(drawList.NativePtr, position, color, start, start + endIdx);
+        }
+    }
+
     /// <summary> Compute the Id of a text and the end of its visible part. </summary>
     /// <param name="text"> The text to filter. </param>
     /// <param name="withNullChecking"> Whether to check for 0-characters in the text. </param>
@@ -46,11 +59,30 @@ public static class StringHelpers
     public static unsafe (int VisibleEnd, ImGuiId Id) ComputeId(ReadOnlySpan<char> text, bool withNullChecking = true)
     {
         var (visibleEnd, labelStart, labelEnd) = SplitString(text, withNullChecking);
-        var bytes    = visibleEnd * 4 > MaxStackAlloc ? new byte[visibleEnd * 4] : stackalloc byte[visibleEnd * 4];
-        var numBytes = Encoding.UTF8.GetBytes(text[labelStart..labelEnd], bytes);
+        var bytes = visibleEnd * 4 > MaxStackAlloc ? new byte[visibleEnd * 4] : stackalloc byte[visibleEnd * 4];
+        text = text[labelStart..labelEnd];
+        if (text.IsEmpty)
+            return (visibleEnd, (ImGuiId)ImGuiNative.igGetID_StrStr(null, null));
+
+        var numBytes = Encoding.UTF8.GetBytes(text, bytes);
         fixed (byte* start = bytes)
         {
             var id = ImGuiNative.igGetID_StrStr(start, start + numBytes);
+            return (visibleEnd, (ImGuiId)id);
+        }
+    }
+
+    /// <inheritdoc cref="ComputeId(ReadOnlySpan{char}, bool)"/>
+    public static unsafe (int VisibleEnd, ImGuiId Id) ComputeId(ReadOnlySpan<byte> text, bool withNullChecking = true)
+    {
+        byte tmp = 0;
+        if (text.IsEmpty)
+            return (0, (ImGuiId)ImGuiNative.igGetID_StrStr(&tmp, &tmp));
+
+        var (visibleEnd, labelStart, labelEnd) = SplitString(text, withNullChecking);
+        fixed (byte* start = text)
+        {
+            var id = ImGuiNative.igGetID_StrStr(start + labelStart, start + labelEnd);
             return (visibleEnd, (ImGuiId)id);
         }
     }
@@ -75,6 +107,23 @@ public static class StringHelpers
         {
             var ret = Vector2.Zero;
             ImGuiNative.igCalcTextSize(&ret, start, start + numBytes, 0, wrapWidth);
+            return ret;
+        }
+    }
+
+    /// <inheritdoc cref="ComputeSize(ReadOnlySpan{char}, bool, float, bool)"/>
+    public static unsafe Vector2 ComputeSize(ReadOnlySpan<byte> text, bool hideTextAfterHash = true, float wrapWidth = 0,
+        bool withNullChecking = true)
+    {
+        if (hideTextAfterHash)
+            text = text[..SplitString(text, withNullChecking).VisibleEnd];
+        if (text.Length == 0)
+            return Vector2.Zero;
+
+        fixed (byte* start = text)
+        {
+            var ret = Vector2.Zero;
+            ImGuiNative.igCalcTextSize(&ret, start, start + text.Length, 0, wrapWidth);
             return ret;
         }
     }
@@ -117,10 +166,39 @@ public static class StringHelpers
         }
     }
 
-    /// <inheritdoc cref="SplitStringWithNull"/>
+    /// <inheritdoc cref="ComputeSizeAndId(ReadOnlySpan{char}, float, bool)"/>
+    public static unsafe (int VisibleEnd, Vector2 Size, ImGuiId Id) ComputeSizeAndId(ReadOnlySpan<byte> text, float wrapWidth = 0,
+        bool withNullChecking = true)
+    {
+        byte tmp = 0;
+        if (text.IsEmpty)
+            return (0, Vector2.Zero, (ImGuiId)ImGuiNative.igGetID_StrStr(&tmp, &tmp));
+
+        var (visibleEnd, labelStart, labelEnd) = SplitString(text, withNullChecking);
+        fixed (byte* start = text)
+        {
+            var size = Vector2.Zero;
+            if (visibleEnd > 0)
+                ImGuiNative.igCalcTextSize(&size, start, start + visibleEnd, 0, wrapWidth);
+            var id = (ImGuiId)ImGuiNative.igGetID_StrStr(start + labelStart, start + labelEnd);
+            return (visibleEnd, size, id);
+        }
+    }
+
+    /// <inheritdoc cref="SplitStringWithNull(ReadOnlySpan{char})"/>
     /// <param name="text"> The text to scan. </param>
     /// <param name="withNullChecking"> Whether the scan should check for 0-characters that terminate the string early. </param>
     public static (int VisibleEnd, int LabelStart, int LabelEnd) SplitString(ReadOnlySpan<char> text, bool withNullChecking = true)
+    {
+        if (withNullChecking)
+            return SplitStringWithNull(text);
+
+        var (visibleEnd, labelStart) = SplitStringWithoutNull(text);
+        return (visibleEnd, labelStart, text.Length);
+    }
+
+    /// <inheritdoc cref="SplitString(ReadOnlySpan{char}, bool)"/>
+    public static (int VisibleEnd, int LabelStart, int LabelEnd) SplitString(ReadOnlySpan<byte> text, bool withNullChecking = true)
     {
         if (withNullChecking)
             return SplitStringWithNull(text);
@@ -151,6 +229,19 @@ public static class StringHelpers
             return (text.Length, 0);
 
         if (idx < text.Length - 2 && text[idx + 2] == '#')
+            return (idx, idx);
+
+        return (idx, 0);
+    }
+
+    /// <inheritdoc cref="SplitStringWithoutNull(ReadOnlySpan{char})"/>
+    public static (int VisibleEnd, int LabelStart) SplitStringWithoutNull(ReadOnlySpan<byte> text)
+    {
+        var idx = text.IndexOf("##"u8);
+        if (idx < 0)
+            return (text.Length, 0);
+
+        if (idx < text.Length - 2 && text[idx + 2] == (byte)'#')
             return (idx, idx);
 
         return (idx, 0);
@@ -198,6 +289,40 @@ public static class StringHelpers
 
                 // check End.
                 newIdx = text[idx..].IndexOf('\0');
+                return (idx, labelStart, newIdx >= 0 ? newIdx : text.Length);
+            }
+
+            ++idx;
+        }
+
+        return (text.Length, labelStart, text.Length);
+    }
+
+    /// <inheritdoc cref="SplitStringWithNull(ReadOnlySpan{char})"/>
+    public static (int VisibleEnd, int LabelStart, int LabelEnd) SplitStringWithNull(ReadOnlySpan<byte> text)
+    {
+        var idx        = 0;
+        var labelStart = 0;
+        while (idx >= 0)
+        {
+            var newIdx = text[idx..].IndexOfAny("#\0"u8);
+            if (newIdx < 0)
+                break;
+
+            idx += newIdx;
+            // We have not encountered ## before since that leads to a return.
+            if (text[idx] == '\0')
+                return (idx, 0, idx);
+
+            // Check for ##
+            if (idx < text.Length - 1 && text[idx + 1] == (byte)'#')
+            {
+                // Check for ###
+                if (idx < text.Length - 2 && text[idx + 2] == (byte)'#')
+                    labelStart = idx;
+
+                // check End.
+                newIdx = text[idx..].IndexOf((byte)0);
                 return (idx, labelStart, newIdx >= 0 ? newIdx : text.Length);
             }
 
