@@ -238,10 +238,11 @@ public static unsafe class ImGuiInternal
         if (visibleEnd == 0)
             return;
 
-        var maxSize = visibleEnd * 4;
+        var maxSize  = visibleEnd * 4;
         var bytes    = maxSize > StringHelpers.MaxStackAlloc ? new byte[maxSize] : stackalloc byte[maxSize];
         var numBytes = Encoding.UTF8.GetBytes(text[..visibleEnd], bytes);
         ImGuiP.RenderTextClippedEx(drawList, posMin, posMax, bytes[..numBytes], *textSizeIfKnown, align, clipRect);
     }
 }
+
 
